@@ -2,12 +2,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <pthread.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
 #define PORT 8080
+#define QUEUE_SIZE 64
+#define DEFAULT_THREADS 4
 
-// Sends a full HTTP response: header first, then the body
+// ---------- Sending responses ----------
+
 void send_response(int client_fd, const char *status,
                    const char *content_type, const char *body, long body_len) {
     char header[512];
@@ -22,9 +27,10 @@ void send_response(int client_fd, const char *status,
     write(client_fd, header, header_len);
     write(client_fd, body, body_len);
 }
+
 // Picks the Content-Type based on the file extension
 const char *get_mime_type(const char *path) {
-    const char *ext = strrchr(path, '.');   // finds the last '.' in the name
+    const char *ext = strrchr(path, '.');
     if (ext == NULL) return "application/octet-stream";
     if (strcmp(ext, ".html") == 0) return "text/html";
     if (strcmp(ext, ".css") == 0)  return "text/css";
@@ -34,9 +40,12 @@ const char *get_mime_type(const char *path) {
     if (strcmp(ext, ".txt") == 0)  return "text/plain";
     return "application/octet-stream";
 }
-// Handles ONE visitor from start to finish
+
+// ---------- Handling ONE visitor ----------
+
 void handle_client(int client_fd) {
-    // A: read the request
+    sleep(2);   // TEMPORARY: pretend the work is slow (we remove this later)
+
     char request[4096];
     int n = read(client_fd, request, sizeof(request) - 1);
     if (n <= 0) {
@@ -45,21 +54,22 @@ void handle_client(int client_fd) {
     }
     request[n] = '\0';
 
-    // B: pull the method and path out of the first line
     char method[16], path[512];
     if (sscanf(request, "%15s %511s", method, path) != 2) {
         close(client_fd);
         return;
     }
     printf("Request: %s %s\n", method, path);
-        // We only support GET for now
+
+    // Only GET is supported
     if (strcmp(method, "GET") != 0) {
         const char *msg = "<h1>405 Method Not Allowed</h1>";
         send_response(client_fd, "405 Method Not Allowed", "text/html", msg, strlen(msg));
         close(client_fd);
         return;
     }
-        // Security: block attempts to escape the www folder
+
+    // Security: block attempts to escape the www folder
     if (strstr(path, "..") != NULL) {
         const char *msg = "<h1>403 Forbidden</h1>";
         send_response(client_fd, "403 Forbidden", "text/html", msg, strlen(msg));
@@ -67,16 +77,13 @@ void handle_client(int client_fd) {
         return;
     }
 
-    // C: "/" means the home page
     if (strcmp(path, "/") == 0) {
         strcpy(path, "/index.html");
     }
 
-    // D: build the file location, e.g. "www" + "/index.html"
     char filepath[600];
     snprintf(filepath, sizeof(filepath), "www%s", path);
 
-    // E: try to open the file
     FILE *f = fopen(filepath, "rb");
     if (f == NULL) {
         const char *msg = "<h1>404 Not Found</h1>";
@@ -85,7 +92,6 @@ void handle_client(int client_fd) {
         return;
     }
 
-    // F: find the file size, then read the whole file into memory
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     rewind(f);
@@ -94,13 +100,70 @@ void handle_client(int client_fd) {
     fread(data, 1, size, f);
     fclose(f);
 
-    // G: send it, then clean up
-    send_response(client_fd, "200 OK",get_mime_type(filepath), data, size);
+    send_response(client_fd, "200 OK", get_mime_type(filepath), data, size);
     free(data);
     close(client_fd);
 }
 
-int main(void) {
+// ---------- The waiting list (queue) ----------
+
+int queue[QUEUE_SIZE];
+int q_head = 0, q_tail = 0, q_count = 0;
+
+pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t q_not_empty = PTHREAD_COND_INITIALIZER;
+pthread_cond_t q_not_full = PTHREAD_COND_INITIALIZER;
+
+// The main thread puts a visitor on the list
+void queue_push(int fd) {
+    pthread_mutex_lock(&q_lock);
+    while (q_count == QUEUE_SIZE) {
+        pthread_cond_wait(&q_not_full, &q_lock);
+    }
+    queue[q_tail] = fd;
+    q_tail = (q_tail + 1) % QUEUE_SIZE;
+    q_count++;
+    pthread_cond_signal(&q_not_empty);
+    pthread_mutex_unlock(&q_lock);
+}
+
+// A worker takes the next visitor from the list
+int queue_pop(void) {
+    pthread_mutex_lock(&q_lock);
+    while (q_count == 0) {
+        pthread_cond_wait(&q_not_empty, &q_lock);
+    }
+    int fd = queue[q_head];
+    q_head = (q_head + 1) % QUEUE_SIZE;
+    q_count--;
+    pthread_cond_signal(&q_not_full);
+    pthread_mutex_unlock(&q_lock);
+    return fd;
+}
+
+// Every worker thread runs this forever
+void *worker(void *arg) {
+    (void)arg;
+    while (1) {
+        int fd = queue_pop();
+        handle_client(fd);
+    }
+    return NULL;
+}
+
+// ---------- main ----------
+
+int main(int argc, char **argv) {
+    int num_threads = DEFAULT_THREADS;
+
+    int opt;
+    while ((opt = getopt(argc, argv, "t:")) != -1) {
+        if (opt == 't') num_threads = atoi(optarg);
+    }
+    if (num_threads < 1) num_threads = 1;
+
+    signal(SIGPIPE, SIG_IGN);
+
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) { perror("socket failed"); exit(1); }
 
@@ -120,13 +183,22 @@ int main(void) {
         perror("listen failed"); exit(1);
     }
 
-    printf("Server running at http://localhost:%d\n", PORT);
+    pthread_t *threads = malloc(num_threads * sizeof(pthread_t));
+    for (int i = 0; i < num_threads; i++) {
+        pthread_create(&threads[i], NULL, worker, NULL);
+    }
+
+    printf("Server running at http://localhost:%d with %d threads\n", PORT, num_threads);
 
     while (1) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd < 0) { perror("accept failed"); continue; }
-        handle_client(client_fd);
+        queue_push(client_fd);
     }
 
     return 0;
 }
+
+
+    
+       
