@@ -10,7 +10,24 @@
 #define PORT 8080
 #define QUEUE_SIZE 64
 #define DEFAULT_THREADS 4
+#include <time.h>
 
+FILE *log_file;
+pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// Writes one line to access.log (safe to call from many threads)
+void log_request(const char *method, const char *path, int status) {
+    char ts[32];
+    time_t now = time(NULL);
+    struct tm tm_info;
+    localtime_r(&now, &tm_info);
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info);
+
+    pthread_mutex_lock(&log_lock);
+    fprintf(log_file, "%s %s %s %d\n", ts, method, path, status);
+    fflush(log_file);
+    pthread_mutex_unlock(&log_lock);
+}
 // ---------- Sending responses ----------
 
 void send_response(int client_fd, const char *status,
@@ -44,8 +61,6 @@ const char *get_mime_type(const char *path) {
 // ---------- Handling ONE visitor ----------
 
 void handle_client(int client_fd) {
-    sleep(2);   // TEMPORARY: pretend the work is slow (we remove this later)
-
     char request[4096];
     int n = read(client_fd, request, sizeof(request) - 1);
     if (n <= 0) {
@@ -65,6 +80,7 @@ void handle_client(int client_fd) {
     if (strcmp(method, "GET") != 0) {
         const char *msg = "<h1>405 Method Not Allowed</h1>";
         send_response(client_fd, "405 Method Not Allowed", "text/html", msg, strlen(msg));
+        log_request(method, path, 405);
         close(client_fd);
         return;
     }
@@ -73,6 +89,7 @@ void handle_client(int client_fd) {
     if (strstr(path, "..") != NULL) {
         const char *msg = "<h1>403 Forbidden</h1>";
         send_response(client_fd, "403 Forbidden", "text/html", msg, strlen(msg));
+        log_request(method, path, 403);
         close(client_fd);
         return;
     }
@@ -88,6 +105,7 @@ void handle_client(int client_fd) {
     if (f == NULL) {
         const char *msg = "<h1>404 Not Found</h1>";
         send_response(client_fd, "404 Not Found", "text/html", msg, strlen(msg));
+        log_request(method, path, 404);
         close(client_fd);
         return;
     }
@@ -101,6 +119,7 @@ void handle_client(int client_fd) {
     fclose(f);
 
     send_response(client_fd, "200 OK", get_mime_type(filepath), data, size);
+    log_request(method, path, 200);
     free(data);
     close(client_fd);
 }
@@ -163,6 +182,9 @@ int main(int argc, char **argv) {
     if (num_threads < 1) num_threads = 1;
 
     signal(SIGPIPE, SIG_IGN);
+    
+    log_file = fopen("access.log", "a");
+    if (log_file == NULL) { perror("log file"); exit(1); }
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) { perror("socket failed"); exit(1); }
