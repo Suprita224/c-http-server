@@ -13,6 +13,12 @@
 #include <time.h>
 
 FILE *log_file;
+volatile sig_atomic_t running = 1;
+
+void on_stop(int sig) {
+    (void)sig;
+    running = 0;
+}
 pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Writes one line to access.log (safe to call from many threads)
@@ -183,6 +189,13 @@ int main(int argc, char **argv) {
 
     signal(SIGPIPE, SIG_IGN);
     
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_stop;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+    
     log_file = fopen("access.log", "a");
     if (log_file == NULL) { perror("log file"); exit(1); }
 
@@ -212,11 +225,19 @@ int main(int argc, char **argv) {
 
     printf("Server running at http://localhost:%d with %d threads\n", PORT, num_threads);
 
-    while (1) {
+        while (running) {
         int client_fd = accept(server_fd, NULL, NULL);
-        if (client_fd < 0) { perror("accept failed"); continue; }
+        if (client_fd < 0) {
+            if (!running) break;      // Ctrl+C was pressed
+            perror("accept failed");
+            continue;
+        }
         queue_push(client_fd);
     }
+
+    printf("\nShutting down...\n");
+    close(server_fd);
+    fclose(log_file);
 
     return 0;
 }
