@@ -238,6 +238,7 @@ int main(int argc, char **argv) {
     printf("\nShutting down...\n");
     close(server_fd);
     fclose(log_file);
+    free(threads);
 
     return 0;
 }

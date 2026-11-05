@@ -1,3 +1,5 @@
 server
 *.o
 access.log
+server_asan
+server_tsan
