@@ -46,9 +46,10 @@ void send_response(int client_fd, const char *status,
         "Connection: close\r\n"
         "\r\n",
         status, content_type, body_len);
-
-    write(client_fd, header, header_len);
-    write(client_fd, body, body_len);
+        ssize_t w1 = write(client_fd, header, header_len);
+        ssize_t w2 = write(client_fd, body, body_len);
+        (void)w1;   // visitor may disconnect early; nothing to do about it
+        (void)w2;
 }
 
 // Picks the Content-Type based on the file extension
@@ -121,7 +122,8 @@ void handle_client(int client_fd) {
     rewind(f);
 
     char *data = malloc(size);
-    fread(data, 1, size, f);
+    size_t got = fread(data, 1, size, f);
+    (void)got;
     fclose(f);
 
     send_response(client_fd, "200 OK", get_mime_type(filepath), data, size);
