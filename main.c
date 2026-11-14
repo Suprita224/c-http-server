@@ -7,7 +7,13 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-#define PORT 8080
+#include <stdlib.h>
+
+static int get_port(void) {
+    const char *p = getenv("PORT");
+    return p ? atoi(p) : 8080;
+}
+#define PORT get_port()
 #define QUEUE_SIZE 64
 #define DEFAULT_THREADS 4
 #include <time.h>
