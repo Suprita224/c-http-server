@@ -69,3 +69,26 @@ Measured on WSL2 Ubuntu with the server and wrk on the same machine, so absolute
 - Each connection serves one request and then closes (`Connection: close`); keep-alive would improve throughput.
 - Only GET is supported.
 - An `epoll` event-driven mode and `sendfile()` for zero-copy file transfer would be natural next steps.
+  
+## Performance
+
+Benchmarked with [wrk](https://github.com/wg/wrk) (`wrk -t4 -c100 -d10s`, serving `index.html`) on WSL2 Ubuntu.
+
+| Server                         | Requests/sec |
+|--------------------------------|-------------:|
+| This server, 1 worker thread   |      ~20,200 |
+| This server, 4 worker threads  |      ~38,700 |
+| This server, 8 worker threads  |      ~57,800 |
+| Python `http.server` (baseline)|         ~952 |
+
+Throughput scales with the thread pool size, and the 8-thread run is roughly 60x faster than Python's built-in server.
+
+### Correctness checks
+- Built and tested with AddressSanitizer and ThreadSanitizer, with no errors or data races reported.
+- Automated end-to-end tests (Python) cover static files, MIME types, and 403/404/405 responses.
+
+## Live stats
+
+`GET /stats` returns server metrics as JSON, and the demo page at `/index.html` polls it every second:
+
+    {"requests": 128, "uptime_sec": 54, "threads": 4}
