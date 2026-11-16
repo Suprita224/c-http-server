@@ -20,5 +20,30 @@
   <button id="btn">Run JS test</button>
   <p id="out"></p>
   <script src="script.js"></script>
+ <h2>Live server stats</h2>
+ <pre id="stats">loading...</pre>
+<script>
+  setInterval(async () => {
+    try {
+      const r = await fetch("/stats");
+      document.getElementById("stats").textContent =
+        JSON.stringify(await r.json(), null, 2);
+    } catch (e) {
+      document.getElementById("stats").textContent = "server not reachable";
+    }
+  }, 1000);
+</script><h2>Live server stats</h2>
+<pre id="stats">loading...</pre>
+<script>
+  setInterval(async () => {
+    try {
+      const r = await fetch("/stats");
+      document.getElementById("stats").textContent =
+        JSON.stringify(await r.json(), null, 2);
+    } catch (e) {
+      document.getElementById("stats").textContent = "server not reachable";
+    }
+  }, 1000);
+</script>
 </body>
 </html>

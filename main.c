@@ -8,7 +8,12 @@
 #include <sys/socket.h>
 
 #include <stdlib.h>
+#include <stdatomic.h>
+#include <time.h>
 
+static atomic_long total_requests = 0;
+static time_t start_time;
+static int num_threads_global = 4;   // set this from your -t option
 static int get_port(void) {
     const char *p = getenv("PORT");
     return p ? atoi(p) : 8080;
@@ -88,6 +93,7 @@ void handle_client(int client_fd) {
         return;
     }
     printf("Request: %s %s\n", method, path);
+    atomic_fetch_add(&total_requests, 1);
 
     // Only GET is supported
     if (strcmp(method, "GET") != 0) {
@@ -106,7 +112,18 @@ void handle_client(int client_fd) {
         close(client_fd);
         return;
     }
-
+    if (strcmp(path, "/stats") == 0) {
+        char body[256];
+        int blen = snprintf(body, sizeof(body),
+            "{\"requests\": %ld, \"uptime_sec\": %ld, \"threads\": %d}",
+            atomic_load(&total_requests),
+            (long)(time(NULL) - start_time),
+            num_threads_global);
+        send_response(client_fd, "200 OK", "application/json", body, blen);
+        log_request(method, path, 200);
+        close(client_fd);
+        return;
+    }
     if (strcmp(path, "/") == 0) {
         strcpy(path, "/index.html");
     }
@@ -199,6 +216,8 @@ int main(int argc, char **argv) {
     
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
+    start_time = time(NULL);
+    num_threads_global = num_threads;    
     sa.sa_handler = on_stop;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGINT, &sa, NULL);
