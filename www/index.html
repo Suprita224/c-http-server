@@ -1,7 +1,24 @@
 <!DOCTYPE html>
 <html>
-<head><title>My C Server</title></head>
+<head>
+  <meta charset="utf-8">
+  <title>C HTTP Server</title>
+  <link rel="stylesheet" href="style.css">
+</head>
 <body>
-  <h1>Hello from my C web server!</h1>
+  <h1>Multithreaded HTTP Server in C</h1>
+  <p>POSIX sockets, thread pool, access log, graceful shutdown.</p>
+
+  <h2>Try the features</h2>
+  <ul>
+    <li><a href="about.html">Another HTML page</a></li>
+    <li><a href="notes.txt">Plain text file (text/plain)</a></li>
+    <li><a href="does-not-exist">Missing page (404)</a></li>
+    <li><a href="../main.c">Path traversal attempt (403)</a></li>
+  </ul>
+
+  <button id="btn">Run JS test</button>
+  <p id="out"></p>
+  <script src="script.js"></script>
 </body>
 </html>
